@@ -47,6 +47,7 @@
  %define tmp2  r10
  %define tmp3  r9
  %define tmp4  r12		; must be saved and restored
+ %define tmp5  r15		; must be saved and restored
  %define return rax
  %macro  SLDR   2
  %endmacro
@@ -57,8 +58,10 @@
  %define func(x) x: endbranch
  %macro FUNC_SAVE 0
 	push	r12
+	push	r15
  %endmacro
  %macro FUNC_RESTORE 0
+	pop	r15
 	pop	r12
  %endmacro
 %endif
@@ -76,13 +79,14 @@
  %define tmp2   r10
  %define tmp3   r13		; must be saved and restored
  %define tmp4   r14		; must be saved and restored
+ %define tmp5   r15		; must be saved and restored
  %define return rax
  %macro  SLDR   2
  %endmacro
  %define SSTR   SLDR
  %define PS     8
  %define LOG_PS 3
- %define stack_size  3*16 + 3*8 	; must be an odd multiple of 8
+ %define stack_size  3*16 + 5*8 	; must be an odd multiple of 8
  %define arg(x)      [rsp + stack_size + PS + PS*x]
 
  %define func(x) proc_frame x
@@ -94,6 +98,7 @@
 	save_reg	r12,  3*16 + 0*8
 	save_reg	r13,  3*16 + 1*8
 	save_reg	r14,  3*16 + 2*8
+	save_reg	r15,  3*16 + 3*8
 	end_prolog
 	mov	arg4, arg(4)
  %endmacro
@@ -105,6 +110,7 @@
 	mov	r12,  [rsp + 3*16 + 0*8]
 	mov	r13,  [rsp + 3*16 + 1*8]
 	mov	r14,  [rsp + 3*16 + 2*8]
+	mov	r15,  [rsp + 3*16 + 3*8]
 	add	rsp, stack_size
  %endmacro
 %endif
@@ -183,23 +189,19 @@ func(gf_2vect_dot_prod_avx2)
 .next_vect:
 	SLDR	src, src_m
 	mov	ptr, [src+vec_i]
-
-	vmovdqu	xgft1_lo, [tmp]		;Load array Ax{00}, Ax{01}, ..., Ax{0f}
-					;     "     Ax{00}, Ax{10}, ..., Ax{f0}
-	vperm2i128 xgft1_hi, xgft1_lo, xgft1_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft1_lo, xgft1_lo, xgft1_lo, 0x00 ; swapped to lo | lo
-	vmovdqu	xgft2_lo, [tmp+vec*(32/PS)]	;Load array Bx{00}, Bx{01}, ..., Bx{0f}
-						;     "     Bx{00}, Bx{10}, ..., Bx{f0}
-	vperm2i128 xgft2_hi, xgft2_lo, xgft2_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft2_lo, xgft2_lo, xgft2_lo, 0x00 ; swapped to lo | lo
-
 	XLDR	x0, [ptr+pos]		;Get next source vector
-	add	tmp, 32
-	add	vec_i, PS
 
 	vpand	xtmpa, x0, xmask0f	;Mask low src nibble in bits 4-0
 	vpsraw	x0, x0, 4		;Shift to put high nibble into bits 4-0
 	vpand	x0, x0, xmask0f		;Mask high src nibble in bits 4-0
+
+	lea	tmp5, [tmp+16]
+	vbroadcasti128	xgft1_lo, [tmp]			;Load array: lo | lo
+	vbroadcasti128	xgft1_hi, [tmp+16]		;            hi | hi
+	add	vec_i, PS
+	vbroadcasti128	xgft2_lo, [tmp +vec*(32/PS)]	;Load array: lo | lo
+	vbroadcasti128	xgft2_hi, [tmp5+vec*(32/PS)]	;            hi | hi
+	add	tmp, 32
 
 	vpshufb	xgft1_hi, x0		;Lookup mul table of high nibble
 	vpshufb	xgft1_lo, xtmpa		;Lookup mul table of low nibble

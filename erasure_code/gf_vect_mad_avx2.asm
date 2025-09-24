@@ -45,6 +45,7 @@
  %define tmp    r11
  %define tmp.w  r11d
  %define tmp.b  r11b
+ %define tmp2   r14
  %define return rax
  %define return.w eax
  %define PS 8
@@ -59,6 +60,7 @@
 	vmovdqa	[rsp+16*2],xmm8
 	save_reg	r12,  3*16 + 0*8
 	save_reg	r15,  3*16 + 1*8
+	save_reg	r14,  3*16 + 2*8
 	end_prolog
 	mov	arg4, arg(4)
 	mov	arg5, arg(5)
@@ -70,6 +72,7 @@
 	vmovdqa	xmm8, [rsp+16*2]
 	mov	r12,  [rsp + 3*16 + 0*8]
 	mov	r15,  [rsp + 3*16 + 1*8]
+	mov	r14,  [rsp + 3*16 + 2*8]
 	add	rsp, stack_size
  %endmacro
 
@@ -85,12 +88,17 @@
  %define tmp      r11
  %define tmp.w    r11d
  %define tmp.b    r11b
+ %define tmp2     r14
  %define return rax
  %define return.w eax
 
  %define func(x) x: endbranch
- %define FUNC_SAVE
- %define FUNC_RESTORE
+ %macro FUNC_SAVE 0
+	push	r14
+ %endmacro
+ %macro FUNC_RESTORE 0
+	pop	r14
+ %endmacro
 %endif
 
 
@@ -150,10 +158,9 @@ func(gf_vect_mad_avx2)
 	vpbroadcastb xmask0f, xmask0fx	;Construct mask 0x0f0f0f...
 
 	sal	vec_i, 5		;Multiply by 32
-	vmovdqu	xgft_lo, [vec_i+mul_array]	;Load array Cx{00}, Cx{01}, Cx{02}, ...
-						; " Cx{00}, Cx{10}, Cx{20}, ... , Cx{f0}
-	vperm2i128 xgft_hi, xgft_lo, xgft_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft_lo, xgft_lo, xgft_lo, 0x00 ; swapped to lo | lo
+	lea	tmp2, [mul_array+16]
+	vbroadcasti128	xgft_lo, [vec_i+mul_array]	;Load array: lo | lo
+	vbroadcasti128	xgft_hi, [vec_i+tmp2]		;            hi | hi
 
 	XLDR	xtmpd, [dest+len]	;backup the last 32 bytes in dest
 

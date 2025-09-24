@@ -48,6 +48,7 @@
  %define tmp.w  r11d
  %define tmp.b  r11b
  %define tmp2   r10
+ %define tmp3   r13
  %define return rax
  %define return.w eax
  %define stack_size  16*9 + 3*8 	; must be an odd multiple of 8
@@ -67,6 +68,7 @@
 	vmovdqa	[rsp+16*8],xmm14
 	save_reg	r12,  9*16 + 0*8
 	save_reg	r15,  9*16 + 1*8
+	save_reg	r13,  9*16 + 2*8
 	end_prolog
 	mov	arg4, arg(4)
 	mov	arg5, arg(5)
@@ -84,6 +86,7 @@
 	vmovdqa	xmm14, [rsp+16*8]
 	mov	r12,  [rsp + 9*16 + 0*8]
 	mov	r15,  [rsp + 9*16 + 1*8]
+	mov	r13,  [rsp + 9*16 + 2*8]
 	add	rsp, stack_size
  %endmacro
 %endif
@@ -101,12 +104,17 @@
  %define tmp.w r11d
  %define tmp.b r11b
  %define tmp2   r10
+ %define tmp3   r14	; must be saved and restored
  %define return rax
  %define return.w eax
 
  %define func(x) x: endbranch
- %define FUNC_SAVE
- %define FUNC_RESTORE
+ %macro FUNC_SAVE 0
+	push	r14
+ %endmacro
+ %macro FUNC_RESTORE 0
+	pop	r14
+ %endmacro
 %endif
 
 ;;; gf_2vect_mad_avx2(len, vec, vec_i, mul_array, src, dest)
@@ -175,17 +183,15 @@ func(gf_2vect_mad_avx2)
 	vpbroadcastb xmask0f, xmask0fx	;Construct mask 0x0f0f0f...
 
 	sal	vec_i, 5		;Multiply by 32
-	sal	vec, 5
 	lea	tmp, [mul_array + vec_i]
-	vmovdqu	xgft1_lo, [tmp]		;Load array Ax{00}, Ax{01}, ..., Ax{0f}
-					;     "     Ax{00}, Ax{10}, ..., Ax{f0}
-	vmovdqu	xgft2_lo, [tmp+vec]	;Load array Bx{00}, Bx{01}, ..., Bx{0f}
-					;     "     Bx{00}, Bx{10}, ..., Bx{f0}
+	sal	vec, 5
 
-	vperm2i128 xgft1_hi, xgft1_lo, xgft1_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft1_lo, xgft1_lo, xgft1_lo, 0x00 ; swapped to lo | lo
-	vperm2i128 xgft2_hi, xgft2_lo, xgft2_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft2_lo, xgft2_lo, xgft2_lo, 0x00 ; swapped to lo | lo
+	lea	tmp3, [tmp+16]
+	vbroadcasti128	xgft1_lo, [tmp]		;Load array: lo | lo
+	vbroadcasti128	xgft1_hi, [tmp3]	;            hi | hi
+	vbroadcasti128	xgft2_lo, [tmp +vec]	;Load array: lo | lo
+	vbroadcasti128	xgft2_hi, [tmp3+vec]	;            hi | hi
+
 	mov	dest2, [dest1+PS]	; reuse mul_array
 	mov	dest1, [dest1]
 

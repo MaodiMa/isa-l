@@ -49,6 +49,7 @@
  %define tmp4  r12		; must be saved and restored
  %define tmp5  r14		; must be saved and restored
  %define tmp6  r15		; must be saved and restored
+ %define tmp7  rbx		; must be saved and restored
  %define return rax
  %define PS 8
  %define LOG_PS 3
@@ -59,8 +60,10 @@
 	push	r13
 	push	r14
 	push	r15
+	push	rbx
  %endmacro
  %macro FUNC_RESTORE 0
+	pop	rbx
 	pop	r15
 	pop	r14
 	pop	r13
@@ -84,6 +87,7 @@
  %define tmp4   r14		; must be saved and restored
  %define tmp5   rdi		; must be saved and restored
  %define tmp6   rsi		; must be saved and restored
+ %define tmp7   rbx		; must be saved and restored
  %define return rax
  %define PS     8
  %define LOG_PS 3
@@ -109,6 +113,7 @@
 	save_reg	r15,  10*16 + 3*8
 	save_reg	rdi,  10*16 + 4*8
 	save_reg	rsi,  10*16 + 5*8
+	save_reg	rbx,  10*16 + 6*8
 	end_prolog
 	mov	arg4, arg(4)
  %endmacro
@@ -130,6 +135,7 @@
 	mov	r15,  [rsp + 10*16 + 3*8]
 	mov	rdi,  [rsp + 10*16 + 4*8]
 	mov	rsi,  [rsp + 10*16 + 5*8]
+	mov	rbx,  [rsp + 10*16 + 6*8]
 	add	rsp, stack_size
  %endmacro
 %endif
@@ -218,52 +224,45 @@ func(gf_6vect_dot_prod_avx2)
 .next_vect:
 	mov	ptr, [src+vec_i]
 	XLDR	x0, [ptr+pos]		;Get next source vector
-	add	vec_i, PS
 
-	vpand	xgft3_lo, x0, xmask0f	;Mask low src nibble in bits 4-0
+	vpand	xtmpa, x0, xmask0f	;Mask low src nibble in bits 4-0
 	vpsraw	x0, x0, 4		;Shift to put high nibble into bits 4-0
 	vpand	x0, x0, xmask0f		;Mask high src nibble in bits 4-0
-	vperm2i128 xtmpa, xgft3_lo, x0, 0x30 	;swap xtmpa from 1lo|2lo to 1lo|2hi
-	vperm2i128 x0, xgft3_lo, x0, 0x12	;swap x0 from    1hi|2hi to 1hi|2lo
 
-	vmovdqu	xgft1_lo, [tmp]			;Load array Ax{00}, Ax{01}, ..., Ax{0f}
-						;     "     Ax{00}, Ax{10}, ..., Ax{f0}
-	vmovdqu	xgft2_lo, [tmp+vskip1*1]	;Load array Bx{00}, Bx{01}, ..., Bx{0f}
-						;     "     Bx{00}, Bx{10}, ..., Bx{f0}
-	vmovdqu	xgft3_lo, [tmp+vskip1*2]	;Load array Cx{00}, Cx{01}, ..., Cx{0f}
-						;     "     Cx{00}, Cx{10}, ..., Cx{f0}
-	lea	ptr, [vskip1 + vskip1*4]	;ptr = vskip5
-
-	vperm2i128 xgft1_hi, xgft1_lo, xgft1_lo, 0x01 ; swapped to hi | lo
-	vperm2i128 xgft2_hi, xgft2_lo, xgft2_lo, 0x01 ; swapped to hi | lo
-	vperm2i128 xgft3_hi, xgft3_lo, xgft3_lo, 0x01 ; swapped to hi | lo
+	lea	tmp7, [tmp+16]
+	vbroadcasti128	xgft1_lo, [tmp]			;Load array: lo | lo
+	vbroadcasti128	xgft1_hi, [tmp+16]		;            hi | hi
+	vbroadcasti128	xgft2_lo, [tmp +vskip1*1]	;Load array: lo | lo
+	vbroadcasti128	xgft2_hi, [tmp7+vskip1*1]	;            hi | hi
+	lea	ptr, [vskip1 + vskip1*4]
+	vbroadcasti128	xgft3_lo, [tmp +vskip1*2]
+	vbroadcasti128	xgft3_hi, [tmp7+vskip1*2]
 
 	vpshufb	xgft1_hi, x0		;Lookup mul table of high nibble
 	vpshufb	xgft1_lo, xtmpa		;Lookup mul table of low nibble
 	vpxor	xgft1_hi, xgft1_lo	;GF add high and low partials
 	vpxor	xp1, xgft1_hi		;xp1 += partial
 
+	vbroadcasti128	xgft1_lo, [tmp +vskip3]	;Load array: lo | lo (vec*3)
+	vbroadcasti128	xgft1_hi, [tmp7+vskip3]	;            hi | hi (vec*3)
+
 	vpshufb	xgft2_hi, x0		;Lookup mul table of high nibble
 	vpshufb	xgft2_lo, xtmpa		;Lookup mul table of low nibble
 	vpxor	xgft2_hi, xgft2_lo	;GF add high and low partials
 	vpxor	xp2, xgft2_hi		;xp2 += partial
+
+	vbroadcasti128	xgft2_lo, [tmp +vskip1*4]
+	vbroadcasti128	xgft2_hi, [tmp7+vskip1*4]
 
 	vpshufb	xgft3_hi, x0		;Lookup mul table of high nibble
 	vpshufb	xgft3_lo, xtmpa		;Lookup mul table of low nibble
 	vpxor	xgft3_hi, xgft3_lo	;GF add high and low partials
 	vpxor	xp3, xgft3_hi		;xp3 += partial
 
-
-	vmovdqu	xgft1_lo, [tmp+vskip3]		;Load array Dx{00}, Dx{01}, ..., Dx{0f}
-						;     "     Dx{00}, Dx{10}, ..., Dx{f0}
-	vmovdqu	xgft2_lo, [tmp+vskip1*4]	;Load array Ex{00}, Ex{01}, ..., Ex{0f}
-						;     "     Ex{00}, Ex{10}, ..., Ex{f0}
-	vmovdqu	xgft3_lo, [tmp+ptr]		;Load array Fx{00}, Fx{01}, ..., Fx{0f}
-						;     "     Fx{00}, Fx{10}, ..., Fx{f0}
+	vbroadcasti128	xgft3_lo, [tmp +ptr]	;Load array: lo | lo (vec*5)
+	vbroadcasti128	xgft3_hi, [tmp7+ptr]	;            hi | hi (vec*5)
 	add	tmp, 32
-	vperm2i128 xgft1_hi, xgft1_lo, xgft1_lo, 0x01 ; swapped to hi | lo
-	vperm2i128 xgft2_hi, xgft2_lo, xgft2_lo, 0x01 ; swapped to hi | lo
-	vperm2i128 xgft3_hi, xgft3_lo, xgft3_lo, 0x01 ; swapped to hi | lo
+	add	vec_i, PS
 
 	vpshufb	xgft1_hi, x0		;Lookup mul table of high nibble
 	vpshufb	xgft1_lo, xtmpa		;Lookup mul table of low nibble
@@ -279,6 +278,7 @@ func(gf_6vect_dot_prod_avx2)
 	vpshufb	xgft3_lo, xtmpa		;Lookup mul table of low nibble
 	vpxor	xgft3_hi, xgft3_lo	;GF add high and low partials
 	vpxor	xp6, xgft3_hi		;xp6 += partial
+
 
 	cmp	vec_i, vec
 	jl	.next_vect
