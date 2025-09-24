@@ -47,6 +47,9 @@
  %define tmp    r11
  %define tmp.w  r11d
  %define tmp.b  r11b
+ %define tmp2   r13
+ %define tmp2.w r13d
+ %define tmp2.b r13b
  %define return rax
  %define return.w eax
  %define stack_size 16*10 + 3*8
@@ -67,6 +70,7 @@
 	vmovdqa	[rsp+16*9],xmm15
 	save_reg	r12,  10*16 + 0*8
 	save_reg	r15,  10*16 + 1*8
+	save_reg	r13,  10*16 + 2*8
 	end_prolog
 	mov	arg4, arg(4)
 	mov	arg5, arg(5)
@@ -85,6 +89,7 @@
 	vmovdqa	xmm15, [rsp+16*9]
 	mov	r12,  [rsp + 10*16 + 0*8]
 	mov	r15,  [rsp + 10*16 + 1*8]
+	mov	r13,  [rsp + 10*16 + 2*8]
 	add	rsp, stack_size
  %endmacro
 
@@ -97,15 +102,22 @@
  %define arg4  r8
  %define arg5  r9
 
- %define tmp   r11
- %define tmp.w r11d
- %define tmp.b r11b
+ %define tmp    r11
+ %define tmp.w  r11d
+ %define tmp.b  r11b
+ %define tmp2   r13
+ %define tmp2.w r13d
+ %define tmp2.b r13b
  %define return rax
  %define return.w eax
 
  %define func(x) x: endbranch
- %define FUNC_SAVE
- %define FUNC_RESTORE
+ %macro FUNC_SAVE 0
+	push	r13
+ %endmacro
+ %macro FUNC_RESTORE 0
+	pop	r13
+ %endmacro
 %endif
 
 ;;; gf_3vect_mad_avx2(len, vec, vec_i, mul_array, src, dest)
@@ -149,6 +161,7 @@ section .text
 %define xgft1_hi  ymm13
 %define xgft2_lo  ymm12
 %define xgft3_lo  ymm11
+%define xgft2_hi  xgft3_lo	; Reuse ymm11
 
 %define x0      ymm0
 %define xtmpa   ymm1
@@ -176,18 +189,14 @@ func(gf_3vect_mad_avx2)
 	vpbroadcastb xmask0f, xmask0fx	;Construct mask 0x0f0f0f...
 
 	sal	vec_i, 5		;Multiply by 32
-	sal	vec, 5
 	lea	tmp, [mul_array + vec_i]
+	sal	vec, 5
 
-	vmovdqu	xgft1_lo, [tmp]		;Load array Ax{00}, Ax{01}, ..., Ax{0f}
-					;     "     Ax{00}, Ax{10}, ..., Ax{f0}
-	vperm2i128 xgft1_hi, xgft1_lo, xgft1_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft1_lo, xgft1_lo, xgft1_lo, 0x00 ; swapped to lo | lo
+	vbroadcasti128	xgft1_lo, [tmp]		;Load array: lo | lo
+	vbroadcasti128	xgft1_hi, [tmp+16]	;            hi | hi
+	vbroadcasti128	xgft2_lo, [tmp+vec]	;Load array: lo | lo
+	vbroadcasti128	xgft2_hi, [tmp+vec+16]	;            hi | hi
 
-	vmovdqu	xgft2_lo, [tmp+vec]	;Load array Bx{00}, Bx{01}, Bx{02}, ...
-					; " Bx{00}, Bx{10}, Bx{20}, ... , Bx{f0}
-	vmovdqu	xgft3_lo, [tmp+2*vec]	;Load array Cx{00}, Cx{01}, Cx{02}, ...
-					; " Cx{00}, Cx{10}, Cx{20}, ... , Cx{f0}
 	mov	dest2, [dest1+PS]	; reuse mul_array
 	mov	dest3, [dest1+2*PS]	; reuse vec_i
 	mov	dest1, [dest1]
@@ -197,11 +206,9 @@ func(gf_3vect_mad_avx2)
 	XLDR	xd1, [dest1+pos]		;Get next dest vector
 	XLDR	xd2, [dest2+pos]		;Get next dest vector
 	XLDR	xd3, [dest3+pos]		;Get next dest vector
-	vperm2i128 xtmph2, xgft2_lo, xgft2_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xtmpl2, xgft2_lo, xgft2_lo, 0x00 ; swapped to lo | lo
 
-	vperm2i128 xtmph3, xgft3_lo, xgft3_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xtmpl3, xgft3_lo, xgft3_lo, 0x00 ; swapped to lo | lo
+	vbroadcasti128	xtmpl3, [tmp+2*vec]	;Load array: lo | lo
+	vbroadcasti128	xtmph3, [tmp+2*vec+16]	;            hi | hi
 
 	vpand	xtmpa, x0, xmask0f	;Mask low src nibble in bits 4-0
 	vpsraw	x0, x0, 4		;Shift to put high nibble into bits 4-0
@@ -214,10 +221,10 @@ func(gf_3vect_mad_avx2)
 	vpxor	xd1, xd1, xtmph1		;xd1 += partial
 
 	; dest2
-	vpshufb	xtmph2, x0		;Lookup mul table of high nibble
-	vpshufb	xtmpl2, xtmpa		;Lookup mul table of low nibble
-	vpxor	xtmph2, xtmpl2		;GF add high and low partials
-	vpxor	xd2, xtmph2		;xd2 += partial
+	vpshufb	xtmph2, xgft2_hi, x0	;Lookup mul table of high nibble
+	vpshufb	xtmpl2, xgft2_lo, xtmpa	;Lookup mul table of low nibble
+	vpxor	xtmph2, xtmph2, xtmpl2	;GF add high and low partials
+	vpxor	xd2, xd2, xtmph2	;xd2 += partial
 
 	; dest3
 	vpshufb	xtmph3, x0		;Lookup mul table of high nibble
@@ -233,23 +240,23 @@ func(gf_3vect_mad_avx2)
 	cmp	pos, len
 	jle	.loop32
 
-	lea	tmp, [len + 32]
-	cmp	pos, tmp
+	lea	tmp2, [len + 32]
+	cmp	pos, tmp2
 	je	.return_pass
 
 .lessthan32:
 	;; Tail len
 	;; Do one more overlap pass
-	mov	tmp.b, 0x1f
-	vpinsrb	xtmpl2x, xtmpl2x, tmp.w, 0
+	mov	tmp2.b, 0x1f
+	vpinsrb	xtmpl2x, xtmpl2x, tmp2.w, 0
 	vpbroadcastb xtmpl2, xtmpl2x	;Construct mask 0x1f1f1f...
 
-	mov	tmp, len		;Overlapped offset length-32
+	mov	tmp2, len		;Overlapped offset length-32
 
-	XLDR	x0, [src+tmp]		;Get next source vector
-	XLDR	xd1, [dest1+tmp]	;Get next dest vector
-	XLDR	xd2, [dest2+tmp]	;Get next dest vector
-	XLDR	xd3, [dest3+tmp]	;Get next dest vector
+	XLDR	x0, [src+tmp2]		;Get next source vector
+	XLDR	xd1, [dest1+tmp2]	;Get next dest vector
+	XLDR	xd2, [dest2+tmp2]	;Get next dest vector
+	XLDR	xd3, [dest3+tmp2]	;Get next dest vector
 
 	sub	len, pos
 
@@ -259,11 +266,10 @@ func(gf_3vect_mad_avx2)
 	vpshufb	xtmpl3, xtmpl3, xtmpl2	;Broadcast len to all bytes. xtmpl2=0x1f1f1f...
 	vpcmpgtb	xtmpl3, xtmpl3, xtmph3
 
-	vperm2i128 xtmph2, xgft2_lo, xgft2_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft2_lo, xgft2_lo, xgft2_lo, 0x00 ; swapped to lo | lo
-
-	vperm2i128 xtmph3, xgft3_lo, xgft3_lo, 0x11 ; swapped to hi | hi
-	vperm2i128 xgft3_lo, xgft3_lo, xgft3_lo, 0x00 ; swapped to lo | lo
+	vbroadcasti128	xgft2_lo, [tmp+vec]	; Load array: lo | lo
+	vbroadcasti128	xtmph2,   [tmp+vec+16]	;             hi | hi
+	vbroadcasti128	xgft3_lo, [tmp+2*vec]	; Load array: Lo | lo
+	vbroadcasti128	xtmph3,   [tmp+2*vec+16];             hi | hi
 
 	vpand	xtmpa, x0, xmask0f	;Mask low src nibble in bits 4-0
 	vpsraw	x0, x0, 4		;Shift to put high nibble into bits 4-0
@@ -290,9 +296,9 @@ func(gf_3vect_mad_avx2)
 	vpand	xtmph3, xtmph3, xtmpl3
 	vpxor	xd3, xd3, xtmph3		;xd3 += partial
 
-	XSTR	[dest1+tmp], xd1
-	XSTR	[dest2+tmp], xd2
-	XSTR	[dest3+tmp], xd3
+	XSTR	[dest1+tmp2], xd1
+	XSTR	[dest2+tmp2], xd2
+	XSTR	[dest3+tmp2], xd3
 
 .return_pass:
 	mov	return, 0
